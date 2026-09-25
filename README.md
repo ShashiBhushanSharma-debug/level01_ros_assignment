@@ -125,6 +125,6 @@ We’ll be looking for:
 We’re excited to see how you approach this task. Good luck, and happy coding! :)
 
 ## Contact Info 
- - Name: Your full name
- - Contact number: Your contact number
- - Email Address: Your email address
+ - Name: Shashi Bhushan Sharma
+ - Contact number: 9219235879
+ - Email Address: shashibhushan.mgs3541@gmail.com

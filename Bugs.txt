@@ -1,0 +1,524 @@
+ROS 2 NAV2 ASSIGNMENT – BUGS AND TROUBLESHOOTING RECORD
+========================================================
+
+Repository: level01_ros_assignment
+Target environment: ROS 2 Humble + Gazebo Classic 11
+
+IMPORTANT
+---------
+The sections below distinguish actual issues found in the supplied repository from
+local environment/setup problems encountered while running the assignment.
+
+
+A. BUGS FOUND IN THE SUPPLIED REPOSITORY
+========================================
+
+1. testbed_description/CMakeLists.txt – missing parentheses in ament_package()
+--------------------------------------------------------------------------
+File:
+  testbed_description/CMakeLists.txt
+
+Original:
+  ament_package
+
+Problem:
+  ament_package is a CMake function and must be invoked with parentheses.
+  Leaving it as plain text causes CMake configuration/build to fail.
+
+Fix:
+  ament_package()
+
+Result:
+  After correcting this line, the package built successfully and the workspace
+  could continue building the remaining packages.
+
+
+2. testbed_description/urdf/testbed.gazebo – malformed IMU XML
+---------------------------------------------------------------
+File:
+  testbed_description/urdf/testbed.gazebo
+
+Original line:
+  <initial_orientation_as_reference>false</initial_orientation_as_reference>>
+
+Problem:
+  The XML tag has an extra trailing '>'. This makes the Gazebo/URDF description
+  malformed and can cause parsing problems.
+
+Fix:
+  <initial_orientation_as_reference>false</initial_orientation_as_reference>
+
+Result:
+  The malformed XML was identified during inspection of the Gazebo sensor
+  configuration. The corrected form is the valid XML form.
+
+
+3. testbed_bringup/maps/testbed_world.yaml – incorrect map image filename
+------------------------------------------------------------------------
+File:
+  testbed_bringup/maps/testbed_world.yaml
+
+Original:
+  image: wrong_path_testbed_world.pgm
+
+Problem:
+  The YAML references a PGM file name that does not exist in the package.
+  The actual map image provided by the repository is:
+  testbed_world.pgm
+
+Fix:
+  image: testbed_world.pgm
+
+Result:
+  After correcting the filename, the map server was able to load the map.
+
+
+4. testbed_bringup/CMakeLists.txt – maps directory was not installed
+-------------------------------------------------------------------
+File:
+  testbed_bringup/CMakeLists.txt
+
+Original install block:
+  install(
+    DIRECTORY
+      launch
+    DESTINATION
+      share/${PROJECT_NAME}/
+  )
+
+Problem:
+  The package installed launch files but did not install the maps directory.
+  Therefore testbed_world.yaml and testbed_world.pgm were not available in the
+  package share/install directory used by map_server.
+
+Fix:
+  install(
+    DIRECTORY
+      launch
+      maps
+    DESTINATION
+      share/${PROJECT_NAME}/
+  )
+
+Result:
+  After rebuilding, the map files appeared under:
+  install/testbed_bringup/share/testbed_bringup/maps/
+  and map_server could successfully configure and activate.
+
+
+B. NAVIGATION/LOCALIZATION ISSUES SOLVED DURING IMPLEMENTATION
+==============================================================
+
+5. Map server lifecycle was not activated automatically
+---------------------------------------------------------
+Issue:
+  nav2_map_server/map_server started as a lifecycle node and initially remained
+  in the 'unconfigured' state. Manually configuring/activating it was required
+  during debugging.
+
+Fix used during implementation:
+  Configure and activate the lifecycle node, then integrate lifecycle handling
+  in the launch workflow so activation is not dependent on manual CLI commands.
+
+Useful checks:
+  ros2 lifecycle get /map_server
+  ros2 lifecycle set /map_server configure
+  ros2 lifecycle set /map_server activate
+
+Result:
+  /map became available as a nav_msgs/msg/OccupancyGrid.
+
+
+6. AMCL did not initially publish map -> odom because no initial pose was set
+----------------------------------------------------------------------------
+Issue:
+  AMCL was active but reported that it could not publish a pose/update the
+  transform until an initial pose was supplied.
+
+Fix:
+  Provide an initial pose through /initialpose (or configure AMCL to use a known
+  initial pose in its parameters). Note: initial_pose_x / initial_pose_y /
+  initial_pose_a is ROS 1-style flat-key syntax and is NOT valid on Nav2 Humble.
+  The correct Humble AMCL parameter names use dot-notation sub-keys:
+
+    set_initial_pose: true
+    initial_pose.x: <value>
+    initial_pose.y: <value>
+    initial_pose.z: 0.0
+    initial_pose.yaw: <value>
+
+Result:
+  AMCL accepted the pose and began publishing the map -> odom transform.
+
+Verification:
+  ros2 run tf2_ros tf2_echo map odom
+
+
+7. AMCL parameter file was not being loaded because of a filename mismatch
+---------------------------------------------------------------------------
+Issue during implementation:
+  The parameter file was named:
+    acml_params.yaml
+  while localisation.launch.py referenced:
+    amcl_params.yaml
+
+Fix:
+  Rename the file to:
+    amcl_params.yaml
+  and rebuild the package.
+
+Result:
+  ros2 param get /amcl set_initial_pose
+  returned:
+    Boolean value is: True
+
+Note:
+  This was introduced while creating the navigation package, not an issue in
+  the original starter repository.
+
+
+8. RViz map display required correct localization state
+---------------------------------------------------------
+Issue:
+  The /map topic was publishing and RViz was subscribed with matching QoS, but
+  the map did not display correctly until AMCL had a valid initial pose and the
+  required TF relationship was available.
+
+Fix:
+  Ensure:
+    /map is published by map_server
+    odom -> base_footprint is available from Gazebo odometry
+    AMCL publishes map -> odom
+    RViz Fixed Frame is compatible with the TF tree (map)
+
+Result:
+  The map displayed correctly after localization was initialized and the RViz
+  session was restarted/updated.
+
+
+9. behavior_server crashed on configure (exit code -11 / SIGSEGV)
+--------------------------------------------------------------
+Issue during implementation:
+  behavior_server logged "Configuring" and then the process died with exit
+  code -11, with no further error text.
+
+Cause:
+  nav2_params.yaml used parameter names local_costmap_topic /
+  global_costmap_topic / local_footprint_topic / global_footprint_topic. On
+  ROS 2 Humble, nav2_behaviors' behavior_server only declares costmap_topic
+  and footprint_topic (no local/global split) -- that four-key schema belongs
+  to a newer Nav2 branch, not Humble.
+
+Fix:
+  behavior_server:
+    ros__parameters:
+      use_sim_time: true
+      costmap_topic: local_costmap/costmap_raw
+      footprint_topic: local_costmap/published_footprint
+      cycle_frequency: 10.0
+      behavior_plugins: [spin, backup, wait]
+      global_frame: map
+      robot_base_frame: base_footprint
+      transform_tolerance: 0.2
+
+Result:
+  behavior_server no longer segfaults during configuration.
+
+
+10. behavior_server fatal plugin load failure ("class does not exist")
+-----------------------------------------------------------------------
+Issue during implementation (surfaced after fixing bug 9):
+  behavior_server logged a FATAL pluginlib error: "According to the loaded
+  plugin descriptions the class nav2_behaviors::Spin with base class type
+  nav2_core::Behavior does not exist. Declared types are
+  nav2_behaviors/AssistedTeleop nav2_behaviors/BackUp
+  nav2_behaviors/DriveOnHeading nav2_behaviors/Spin nav2_behaviors/Wait."
+
+Cause:
+  The plugin type strings used C++ namespace syntax (nav2_behaviors::Spin)
+  instead of the pluginlib-registered name, which uses a forward slash
+  (nav2_behaviors/Spin) on this Humble build.
+
+Fix:
+  spin:
+    plugin: "nav2_behaviors/Spin"
+  backup:
+    plugin: "nav2_behaviors/BackUp"
+  wait:
+    plugin: "nav2_behaviors/Wait"
+
+Result:
+  behavior_server configured and activated successfully. Together, bugs 9 and
+  10 were both required to get behavior_server running -- fixing only the
+  topic parameter names (bug 9) was not sufficient on its own.
+
+
+11. Nav2 costmap width/height parameter type mismatch
+------------------------------------------------------
+Issue during implementation:
+  Width/height values were initially written as floating-point values such as:
+    width: 3.0
+    height: 3.0
+  which caused a Humble costmap parameter type error.
+
+Fix:
+  Use integer values:
+    width: 3
+    height: 3
+
+Result:
+  controller/local costmap initialization proceeded without that parameter type
+  error.
+
+
+12. bt_navigator failed to parse the default behavior tree XML
+-----------------------------------------------------------------
+Issue during implementation:
+  On activation, bt_navigator logged: "Exception when loading BT: Error at
+  line 7: -> Node not recognized: RecoveryNode" while loading
+  navigate_through_poses_w_replanning_and_recovery.xml, and the lifecycle
+  manager aborted bring-up.
+
+Cause:
+  bt_navigator's plugin_lib_names list only registered a subset of BT node
+  plugins (compute-path, follow-path, spin/wait/back-up actions, and several
+  condition nodes). It was missing plugins the default XML depends on,
+  including the RecoveryNode control node, PipelineSequence, and the
+  rate/distance controller decorators.
+
+Fix:
+  Extended plugin_lib_names to include the full default Humble set, notably:
+    - nav2_recovery_node_bt_node
+    - nav2_pipeline_sequence_bt_node
+    - nav2_rate_controller_bt_node
+    - nav2_distance_controller_bt_node
+    - nav2_speed_controller_bt_node
+    - nav2_round_robin_node_bt_node
+    - nav2_remove_passed_goals_action_bt_node
+    - nav2_navigate_to_pose_action_bt_node
+    - nav2_navigate_through_poses_action_bt_node
+  (in addition to the entries already present: compute_path_to_pose,
+  follow_path, spin/wait/back_up, clear_costmap_service, and the goal/path
+  condition nodes).
+
+Result:
+  bt_navigator loaded the default BT XML and activated successfully.
+
+
+13. Sparse / near-empty laser scan
+------------------------------------
+Issue during implementation:
+  Only a handful of LaserScan points ever rendered, instead of a dense
+  500-sample scan, even when close to walls -- causing an unreliable/near-
+  empty local costmap.
+
+Cause:
+  The Gazebo ray sensor plugin for lidar_link_1 had
+  <min_intensity>100.0</min_intensity>. Gazebo Classic's ray sensor plugin
+  generally does not compute meaningful per-point intensity values (often 0
+  for all returns), so this threshold silently discarded nearly every scan
+  point before publishing.
+
+Fix:
+  <min_intensity>0.0</min_intensity>
+
+Result:
+  Full-density laser scans were published and correctly matched the map's
+  wall geometry in RViz.
+
+Note:
+  The sensor's <range><max>1.5</max></range> (1.5 m) was confirmed to be
+  intentional, not a bug -- it matches obstacle_max_range /
+  raytrace_max_range: 1.5 already set in the local_costmap parameters.
+
+
+14. AMCL confidently localizing to the wrong position (corridor degeneracy) --
+    root cause of the robot failing to pass through narrow doorways
+--------------------------------------------------------------------------
+Issue during implementation:
+  Even after a correct initial 2D Pose Estimate and after fixing the scan
+  density (bug 13), the robot's estimated position would still drift away
+  from its true position during a run, and would sometimes fail to line up
+  with narrow doorways. Unusually, the AMCL particle cloud looked
+  tight/converged rather than spread out -- meaning AMCL was confident about
+  a position that was actually wrong, not simply losing track gradually.
+
+Diagnosis:
+  ros2 topic echo /amcl_pose --once was captured mid-run, at the moment the
+  robot was physically in a doorway in Gazebo but appeared to be at an
+  unrelated corridor intersection in RViz. The pose covariance diagonal was:
+    x variance:   12.876874725539539   (std dev ~ 3.6 m)
+    y variance:    0.6568860939092682   (std dev ~ 0.8 m)
+    yaw variance:  3.8801911222570813   (std dev ~ 113 degrees)
+  Tight in y, wildly uncertain in x and yaw -- the signature of AMCL
+  degeneracy along a corridor's long axis: with a 1.5 m-range 2D lidar in a
+  map with multiple visually-identical straight corridor crossings, a single
+  laser scan sees the same two parallel walls no matter where along the
+  corridor (or which way) the robot actually is. Without enough odometry-
+  driven correction, the particle filter can converge confidently onto the
+  wrong instance of a repeated corridor pattern.
+
+Fix:
+  Lowered AMCL's odometry noise model parameters (alpha1-alpha4), which were
+  all at the default 0.2, so accumulated wheel-odometry motion is trusted
+  more heavily relative to ambiguous single-scan laser matches:
+    alpha1: 0.05   # was 0.2
+    alpha2: 0.05   # was 0.2
+    alpha3: 0.05   # was 0.2
+    alpha4: 0.05   # was 0.2
+    alpha5: 0.2    # unchanged
+
+Result:
+  The AMCL particle cloud stayed tightly converged and correctly positioned
+  through the corridor. The robot was subsequently able to pass cleanly
+  through narrow doorways and reach multiple different goal poses
+  consistently across repeated runs, with RViz's estimated position matching
+  Gazebo's ground-truth position throughout.
+
+Note:
+  Visualizing the particle cloud required adding RViz's "ParticleCloud"
+  display via ros-humble-nav2-rviz-plugins (Add -> By display type), since
+  Humble's AMCL publishes /particle_cloud as nav2_msgs/msg/ParticleCloud, a
+  custom type not supported by the default PoseArray display.
+
+
+C. ENVIRONMENT / DOCKER ISSUES (NOT REPOSITORY BUGS)
+=====================================================
+
+15. ROS 2 Humble environment required because the assignment targets Humble
+---------------------------------------------------------------------------
+Issue:
+  Host system used ROS 2 Jazzy, while the assignment specifies ROS 2 Humble and
+  Gazebo Classic 11.
+
+Fix:
+  Created an isolated Docker environment using ROS 2 Humble and mounted the
+  workspace into the container.
+
+Result:
+  Humble development/testing was performed without replacing the host Jazzy
+  installation.
+
+
+16. Docker GUI display authorization problem
+---------------------------------------------
+Issue:
+  RViz/Gazebo initially reported:
+    Authorization required, but no authorization protocol specified
+    qt.qpa.xcb: could not connect to display :1
+
+Cause:
+  The Docker container did not have the required X11 display authorization.
+
+Fix:
+  Configure DISPLAY/Xauthority and allow local X11 access, for example:
+    xhost +SI:localuser:root
+  with the X11 socket and Xauthority mounted into the container.
+
+Result:
+  RViz and Gazebo GUI could access the host display.
+
+
+17. Gazebo OpenGL/DRM crash inside Docker
+------------------------------------------
+Issue:
+  gzserver/gzclient crashed with Mesa/DRM messages such as:
+    Failed to query drm device
+    failed to load driver: iris
+    failed to open /dev/dri/card1
+  followed by exit code -11.
+
+Cause:
+  Gazebo attempted hardware OpenGL/DRM access that was not available inside the
+  container.
+
+Fix:
+  Force software OpenGL rendering:
+    export LIBGL_ALWAYS_SOFTWARE=1
+
+Result:
+  Gazebo and RViz ran successfully inside the container.
+
+
+18. Missing ROS/Gazebo dependencies in the newly created container
+------------------------------------------------------------------
+Issue:
+  Several required packages were absent from the clean container, including
+  xacro and Nav2 components.
+
+Fix examples:
+  apt install -y ros-humble-xacro
+  apt install -y ros-humble-nav2-map-server
+  apt install -y ros-humble-nav2-amcl
+  apt install -y ros-humble-nav2-behaviors
+  plus the required planner/controller/lifecycle packages.
+
+Result:
+  The assignment packages and Nav2 workflow could be launched successfully.
+
+
+19. ament_package Python module missing in the new container
+--------------------------------------------------------------
+Issue:
+  Build failed with:
+    ModuleNotFoundError: No module named 'ament_package'
+
+Fix:
+  Install the missing Python package:
+    apt install -y python3-ament-package
+
+Result:
+  testbed_navigation could be built successfully.
+
+
+D. FINAL WORKING NAVIGATION/LOCALIZATION FLOW
+==============================================
+
+Simulation:
+  testbed_full_bringup.launch.py
+
+Map:
+  testbed_navigation/map_loader.launch.py
+  -> map_server
+  -> lifecycle configure/activate
+  -> /map
+
+Localization:
+  testbed_navigation/localisation.launch.py
+  -> AMCL (corrected initial_pose.* dot-notation, tuned alpha1-4)
+  -> initial pose
+  -> map -> odom
+
+Navigation:
+  testbed_navigation/navigation.launch.py
+  -> planner_server
+  -> controller_server
+  -> bt_navigator (full plugin_lib_names set)
+  -> behavior_server (corrected costmap/footprint topic params + plugin names)
+  -> lifecycle_manager_navigation
+
+Robot interfaces verified:
+  /scan  -> sensor_msgs/msg/LaserScan (min_intensity: 0.0, dense scan)
+  /odom  -> nav_msgs/msg/Odometry
+  /cmd_vel
+
+TF chain:
+  map
+   |
+   | AMCL
+   v
+  odom
+   |
+   | Gazebo diff-drive odometry
+   v
+  base_footprint
+   |
+   | static transform
+   v
+  lidar_link_1
+
+Navigation test:
+  RViz -> 2D Goal Pose -> /navigate_to_pose -> planner/controller/BT -> /cmd_vel
+  -> Gazebo robot motion. Verified across multiple goal poses and repeated
+  runs, including passing through narrow doorways, with RViz's localized
+  position matching Gazebo ground truth throughout.
