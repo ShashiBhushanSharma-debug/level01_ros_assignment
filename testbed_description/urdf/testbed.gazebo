@@ -54,7 +54,7 @@
       <ray>
         <scan>
           <horizontal>
-            <samples>300</samples>
+            <samples>500</samples>
             <resolution>1</resolution>
             <min_angle>-3.14</min_angle>
             <max_angle>3.14</max_angle>
@@ -63,7 +63,7 @@
         <range>
           <min>0.10</min>
           <max>1.5</max>
-          <resolution>0.01</resolution>
+          <resolution>0.005</resolution>
         </range>
         <noise>
           <type>gaussian</type>
@@ -79,7 +79,7 @@
         <!-- Output as a PointCloud2, see above for other types -->
         <output_type>sensor_msgs/LaserScan</output_type>
         <!-- Clip intensity values so all are above 100, optional -->
-        <min_intensity>100.0</min_intensity>
+        <min_intensity>0.0</min_intensity>
         <!-- Frame id for header of output, defaults to sensor's parent link name -->
         <frame_name>lidar_link_1</frame_name>
       </plugin>

@@ -1,0 +1,27 @@
+amcl:
+  ros__parameters:
+    use_sim_time: true
+
+    set_initial_pose: true
+    initial_pose.x: -0.0138
+    initial_pose.y: 4.9945
+    initial_pose.z: 0.0
+    initial_pose.yaw: -0.0424
+
+    min_particles: 500
+    max_particles: 5000
+
+    alpha1: 0.05
+    alpha2: 0.05
+    alpha3: 0.05
+    alpha4: 0.05
+    alpha5: 0.2
+
+    laser_model_type: "likelihood_field"
+
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    scan_topic: "/scan"
+    tf_broadcast: true
